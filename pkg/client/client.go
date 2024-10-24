@@ -54,7 +54,7 @@ func (c *client) WaitForStorageToBeReady(redisEndpoints []config.RedisEndpoint, 
 				return err
 			}
 
-			if dbsize == (int64((math.Pow(float64(parameters.Shift+1), float64(parameters.TreeHeight))))-1)*2 {
+			if dbsize == (int64((math.Pow(float64(parameters.Shift+1), float64(parameters.TreeHeight)))) - 1) {
 				break
 			}
 		}

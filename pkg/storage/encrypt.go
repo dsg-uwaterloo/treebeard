@@ -10,6 +10,7 @@ import (
 )
 
 func Encrypt(s string, key []byte) (string, error) {
+	return s, nil
 	// Generate a random 12-byte nonce
 	nonce := make([]byte, 12)
 	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
@@ -32,6 +33,8 @@ func Encrypt(s string, key []byte) (string, error) {
 }
 
 func Decrypt(s string, key []byte) (string, error) {
+	return s, nil
+
 	ciphertext, err := hex.DecodeString(s)
 	if err != nil {
 		return "", err

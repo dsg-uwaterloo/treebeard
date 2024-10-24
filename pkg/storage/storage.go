@@ -22,7 +22,6 @@ import (
 type StorageHandler struct {
 	treeHeight int
 	Z          int // the maximum number of real blocks in each bucket
-	S          int // the number of dummy blocks in each bucket
 	shift      int
 	storages   map[int]*redis.Client // map of storage id to redis client
 	storageMus map[int]*sync.Mutex   // map of storage id to mutex
@@ -34,7 +33,7 @@ type BlockInfo struct {
 	Path  int
 }
 
-func NewStorageHandler(treeHeight int, Z int, S int, shift int, redisEndpoints []config.RedisEndpoint) *StorageHandler { // map of storage id to storage info
+func NewStorageHandler(treeHeight int, Z int, shift int, redisEndpoints []config.RedisEndpoint) *StorageHandler { // map of storage id to storage info
 	log.Debug().Msgf("Creating a new storage handler")
 	storages := make(map[int]*redis.Client)
 	for _, endpoint := range redisEndpoints {
@@ -51,17 +50,12 @@ func NewStorageHandler(treeHeight int, Z int, S int, shift int, redisEndpoints [
 	s := &StorageHandler{
 		treeHeight: treeHeight,
 		Z:          Z,
-		S:          S,
 		shift:      shift,
 		storages:   storages,
 		storageMus: storageMus,
 		key:        []byte("passphrasewhichneedstobe32bytes!"),
 	}
 	return s
-}
-
-func (s *StorageHandler) GetMaxAccessCount() int {
-	return s.S
 }
 
 func (s *StorageHandler) LockStorage(storageID int) {
@@ -84,7 +78,7 @@ func (s *StorageHandler) InitDatabase() error {
 		if err != nil {
 			return err
 		}
-		if dbsize == (int64((math.Pow(float64(s.shift+1), float64(s.treeHeight))))-1)*2 {
+		if dbsize == (int64((math.Pow(float64(s.shift+1), float64(s.treeHeight)))) - 1) {
 			continue
 		}
 		err = client.FlushAll(context.Background()).Err()
@@ -105,115 +99,16 @@ type BlockOffsetStatus struct {
 	BlockFound string
 }
 
-func (s *StorageHandler) BatchGetBlockOffset(bucketIDs []int, storageID int, blocks []string) (blockoffsetStatuses map[int]BlockOffsetStatus, err error) {
-	allBlockMap, err := s.BatchGetAllMetaData(bucketIDs, storageID)
-	if err != nil {
-		log.Debug().Msgf("Error getting meta data")
-		return nil, err
-	}
-	blockoffsetStatuses = make(map[int]BlockOffsetStatus)
-	for _, bucketID := range bucketIDs {
-		blockoffsetStatuses[bucketID] = BlockOffsetStatus{
-			Offset:     -1,
-			IsReal:     false,
-			BlockFound: "",
-		}
-		blockMap := allBlockMap[bucketID]
-		for _, block := range blocks {
-			pos, exist := blockMap[block]
-			if exist {
-				log.Debug().Msgf("Found block %s in bucket %d", block, bucketID)
-				blockoffsetStatuses[bucketID] = BlockOffsetStatus{
-					Offset:     pos,
-					IsReal:     true,
-					BlockFound: block,
-				}
-			}
-		}
-		if blockoffsetStatuses[bucketID].Offset == -1 {
-			log.Debug().Msgf("Did not find any block in bucket %d, returning dummy block", bucketID)
-			if pos, exist := blockMap["dummy1"]; exist {
-				blockoffsetStatuses[bucketID] = BlockOffsetStatus{
-					Offset:     pos,
-					IsReal:     false,
-					BlockFound: "dummy1",
-				}
-			} else {
-				log.Error().Msgf("Did not find valid dummy block in bucket %d", bucketID)
-				return nil, err
-			}
-		}
-	}
-	return blockoffsetStatuses, nil
-}
-
-// It returns the number of times a bucket was accessed for multiple buckets.
-// This is helpful to know when to do an early reshuffle.
-func (s *StorageHandler) BatchGetAccessCount(bucketIDs []int, storageID int) (counts map[int]int, err error) {
-	ctx := context.Background()
-	pipe := s.storages[storageID].Pipeline()
-	resultsMap := make(map[int]*redis.StringCmd)
-	counts = make(map[int]int)
-	// Iterate over each bucketID
-	for _, bucketID := range bucketIDs {
-		// Issue HGET command for the access count of the current bucketID within the pipeline
-		cmd := pipe.HGet(ctx, strconv.Itoa(-1*bucketID), "accessCount")
-		resultsMap[bucketID] = cmd
-	}
-
-	// Execute the pipeline for all bucketIDs
-	_, err = pipe.Exec(ctx)
-	if err != nil {
-		return nil, err
-	}
-	// Process the results for each bucketID
-	for bucketID, cmd := range resultsMap {
-		accessCountS, err := cmd.Result()
-		if err != nil {
-			if err != redis.Nil {
-				return nil, err
-			}
-			counts[bucketID] = 0
-			log.Debug().Msgf("Access count for bucket %d and storage %d is %d", bucketID, storageID, 0)
-		} else {
-			accessCount, err := strconv.Atoi(accessCountS)
-			if err != nil {
-				return nil, err
-			}
-			counts[bucketID] = accessCount
-			log.Debug().Msgf("Access count for bucket %d and storage %d is %d", bucketID, storageID, accessCount)
-		}
-	}
-
-	return counts, nil
-}
-
 // It reads multiple buckets from a single storage shard.
 func (s *StorageHandler) BatchReadBucket(bucketIDs []int, storageID int) (blocks map[int]map[string]string, err error) {
-	metadataMap, err := s.BatchGetAllMetaData(bucketIDs, storageID)
-	results := make(map[int]map[string]*redis.StringCmd)
+	// metadataMap, err := s.BatchGetAllMetaData(bucketIDs, storageID)
+	results := make(map[int][]*redis.StringCmd)
 	pipe := s.storages[storageID].Pipeline()
 	ctx := context.Background()
-	for bucketID, metadata := range metadataMap {
-		i := 0
-		results[bucketID] = make(map[string]*redis.StringCmd)
-		for key, pos := range metadata {
-			if !strings.HasPrefix(key, "dummy") {
-				results[bucketID][key] = pipe.HGet(ctx, strconv.Itoa(bucketID), strconv.Itoa(pos))
-				i++
-			}
-		}
-		dummyCount := 1
-		for ; i < s.Z; i++ {
-			dummyID := "dummy" + strconv.Itoa(dummyCount)
-			pos, exists := metadata[dummyID]
-			if !exists {
-				return nil, err
-			}
-			// We should do this data acess for not leaking access pattern
-			pipe.HGet(ctx, strconv.Itoa(bucketID), strconv.Itoa(pos))
-			dummyCount++
-		}
+	for _, bucketID := range bucketIDs {
+		results[bucketID] = make([]*redis.StringCmd, s.Z)
+		pos := 0
+		results[bucketID][0] = pipe.HGet(ctx, strconv.Itoa(bucketID), strconv.Itoa(pos))
 	}
 	_, err = pipe.Exec(ctx)
 	if err != nil {
@@ -222,7 +117,7 @@ func (s *StorageHandler) BatchReadBucket(bucketIDs []int, storageID int) (blocks
 	blocks = make(map[int]map[string]string)
 	for bucketID, result := range results {
 		blocks[bucketID] = make(map[string]string)
-		for key, cmd := range result {
+		for _, cmd := range result {
 			value, err := cmd.Result()
 			if err != nil {
 				return nil, err
@@ -231,7 +126,13 @@ func (s *StorageHandler) BatchReadBucket(bucketIDs []int, storageID int) (blocks
 			if err != nil {
 				return nil, err
 			}
-			blocks[bucketID][key] = value
+			key, val, err := deserializeKeyValue(value)
+			if err != nil {
+				return nil, err
+			}
+			if key != "dummy" {
+				blocks[bucketID][key] = val
+			}
 		}
 	}
 	return blocks, nil
@@ -254,7 +155,6 @@ func (s *StorageHandler) BatchWriteBucket(storageID int, readBucketBlocksList ma
 	pipe := s.storages[storageID].Pipeline()
 	ctx := context.Background()
 	dataResults := make(map[int]*redis.BoolCmd)
-	metadataResults := make(map[int]*redis.BoolCmd)
 	writtenBlocks = make(map[string]string)
 
 	log.Debug().Msgf("buckets from readBucketBlocksList: %v", readBucketBlocksList)
@@ -263,14 +163,7 @@ func (s *StorageHandler) BatchWriteBucket(storageID int, readBucketBlocksList ma
 	bucketToValidBlocksMap := s.getBucketToValidBlocksMap(shardNodeBlocks)
 
 	for bucketID, readBucketBlocks := range readBucketBlocksList {
-		values := make([]string, s.Z+s.S)
-		metadatas := make([]string, s.Z+s.S)
-		realIndex := make([]int, s.Z+s.S)
-		for k := 0; k < s.Z+s.S; k++ {
-			// Generate a random number between 0 and 9
-			realIndex[k] = k
-		}
-		shuffleArray(realIndex)
+		values := make([]string, s.Z)
 		i := 0
 		for key, value := range readBucketBlocks {
 			if strings.HasPrefix(key, "dummy") {
@@ -278,11 +171,11 @@ func (s *StorageHandler) BatchWriteBucket(storageID int, readBucketBlocksList ma
 			}
 			if i < s.Z {
 				writtenBlocks[key] = value
-				values[realIndex[i]], err = Encrypt(value, s.key)
+				serialized := serializeKeyValue(key, value)
+				values[i], err = Encrypt(serialized, s.key)
 				if err != nil {
 					return nil, err
 				}
-				metadatas[i] = strconv.Itoa(realIndex[i]) + key
 				i++
 				// pos_map is updated in server?
 			} else {
@@ -295,32 +188,27 @@ func (s *StorageHandler) BatchWriteBucket(storageID int, readBucketBlocksList ma
 			}
 			if i < s.Z {
 				writtenBlocks[key] = shardNodeBlocks[key].Value
-				values[realIndex[i]], err = Encrypt(shardNodeBlocks[key].Value, s.key)
+				serialized := serializeKeyValue(key, shardNodeBlocks[key].Value)
+				values[i], err = Encrypt(serialized, s.key)
 				if err != nil {
 					return nil, err
 				}
-				metadatas[i] = strconv.Itoa(realIndex[i]) + key
 				i++
 			} else {
 				break
 			}
 		}
-		dummyCount := 1
-		for ; i < s.Z+s.S; i++ {
-			dummyID := "dummy" + strconv.Itoa(dummyCount)
-			dummyString := "b" + strconv.Itoa(bucketID) + "d" + strconv.Itoa(i)
-			dummyString, err = Encrypt(dummyString, s.key)
+		for ; i < s.Z; i++ {
+			dummyString := "dummy"
+			serialized := serializeKeyValue(dummyString, dummyString)
+			dummyString, err = Encrypt(serialized, s.key)
 			if err != nil {
 				log.Error().Msgf("Error encrypting data")
 				return nil, err
 			}
-			// push dummy to array
-			values[realIndex[i]] = dummyString
-			// push meta data of dummies to array
-			metadatas[i] = strconv.Itoa(realIndex[i]) + dummyID
-			dummyCount++
+			values[i] = dummyString
 		}
-		dataResults[i], metadataResults[i] = s.BatchPushDataAndMetadata(bucketID, values, metadatas, pipe)
+		dataResults[i] = s.BatchPushData(bucketID, values, pipe)
 	}
 	_, err = pipe.Exec(ctx)
 	if err != nil {
@@ -328,15 +216,6 @@ func (s *StorageHandler) BatchWriteBucket(storageID int, readBucketBlocksList ma
 	}
 	for _, dataCmd := range dataResults {
 		_, err := dataCmd.Result()
-		if err != nil {
-			if err != redis.Nil {
-				return nil, err
-			}
-			return nil, err
-		}
-	}
-	for _, metadataCmd := range dataResults {
-		_, err := metadataCmd.Result()
 		if err != nil {
 			if err != redis.Nil {
 				return nil, err
@@ -375,33 +254,11 @@ func (s *StorageHandler) BatchReadBlock(bucketOffsets map[int]int, storageID int
 		if err != nil {
 			return nil, err
 		}
-		values[bucketID] = value
-	}
-	invalidateMap := make(map[int]*redis.IntCmd)
-	bucketIDs := make([]int, len(bucketOffsets))
-	for bucketID := range bucketOffsets {
-		bucketIDs = append(bucketIDs, bucketID)
-	}
-	metadataMap, err := s.BatchGetAllMetaData(bucketIDs, storageID)
-	if err != nil {
-		return nil, err
-	}
-	for bucketID, offset := range bucketOffsets {
-		// Issue HGET commands to invalidate value for current bucketID
-		metadata := metadataMap[bucketID]
-		for _, pos := range metadata {
-			if pos == offset {
-				cmd := pipe.HSet(ctx, strconv.Itoa(-1*bucketID), strconv.Itoa(pos), "__null__")
-				invalidateMap[bucketID] = cmd
-			}
+		_, val, err := deserializeKeyValue(value)
+		if err != nil {
+			return nil, err
 		}
-		cmd := pipe.HIncrBy(ctx, strconv.Itoa(-1*bucketID), "accessCount", 1)
-		invalidateMap[bucketID] = cmd
-	}
-	_, err = pipe.Exec(ctx)
-	if err != nil {
-		log.Debug().Msgf("error executing batch read block pipe: %v", err)
-		return nil, err
+		values[bucketID] = val
 	}
 	return values, nil
 }

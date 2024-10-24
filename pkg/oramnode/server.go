@@ -21,11 +21,9 @@ import (
 )
 
 type storage interface {
-	GetMaxAccessCount() int
+	// GetMaxAccessCount() int
 	LockStorage(storageID int)
 	UnlockStorage(storageID int)
-	BatchGetBlockOffset(bucketIDs []int, storageID int, blocks []string) (offsets map[int]strg.BlockOffsetStatus, err error)
-	BatchGetAccessCount(bucketIDs []int, storageID int) (counts map[int]int, err error)
 	BatchReadBucket(bucketIDs []int, storageID int) (blocks map[int]map[string]string, err error)
 	BatchWriteBucket(storageID int, readBucketBlocksList map[int]map[string]string, shardNodeBlocks map[string]strg.BlockInfo) (writtenBlocks map[string]string, err error)
 	BatchReadBlock(offsets map[int]int, storageID int) (values map[int]string, err error)
@@ -65,7 +63,6 @@ func (o *oramNodeServer) performFailedOperations() error {
 	o.oramNodeFSM.unfinishedEvictionMu.Lock()
 	o.oramNodeFSM.unfinishedReadPathMu.Lock()
 	needsEviction := o.oramNodeFSM.unfinishedEviction
-	needsReadPath := o.oramNodeFSM.unfinishedReadPath
 	o.oramNodeFSM.unfinishedEvictionMu.Unlock()
 	o.oramNodeFSM.unfinishedReadPathMu.Unlock()
 	if needsEviction != nil {
@@ -75,66 +72,12 @@ func (o *oramNodeServer) performFailedOperations() error {
 		log.Debug().Msgf("Performing failed eviction for storageID %d", storageID)
 		o.evict(storageID)
 	}
-	if needsReadPath != nil {
-		log.Debug().Msgf("Performing failed read path")
-		o.oramNodeFSM.unfinishedReadPathMu.Lock()
-		paths := o.oramNodeFSM.unfinishedReadPath.paths
-		storageID := o.oramNodeFSM.unfinishedReadPath.storageID
-		o.oramNodeFSM.unfinishedReadPathMu.Unlock()
-		buckets, _ := o.storageHandler.GetBucketsInPaths(paths)
-		log.Debug().Msgf("Performing failed read path with paths %v and storageID %d", paths, storageID)
-		o.earlyReshuffle(buckets, storageID)
-	}
 	return nil
 }
 
 type getAccessCountResponse struct {
 	counts map[int]int
 	err    error
-}
-
-func (o *oramNodeServer) asyncGetAccessCount(bucketIDs []int, storageID int, responseChan chan getAccessCountResponse) {
-	counts, err := o.storageHandler.BatchGetAccessCount(bucketIDs, storageID)
-	responseChan <- getAccessCountResponse{counts: counts, err: err}
-}
-
-func (o *oramNodeServer) earlyReshuffle(buckets []int, storageID int) error {
-	log.Debug().Msgf("Performing early reshuffle with buckets %v and storageID %d", buckets, storageID)
-	// TODO: can we make this a background thread?
-	batches := distributeBucketIDs(buckets, o.parameters.RedisPipelineSize)
-	accessCountChan := make(chan getAccessCountResponse)
-	for _, bucketIDs := range batches {
-		go o.asyncGetAccessCount(bucketIDs, storageID, accessCountChan)
-	}
-	var bucketsToWrite []int
-	for i := 0; i < len(batches); i++ {
-		response := <-accessCountChan
-		if response.err != nil {
-			return fmt.Errorf("unable to get access count from the server; %s", response.err)
-		}
-		for bucket, accessCount := range response.counts {
-			if accessCount >= o.storageHandler.GetMaxAccessCount() {
-				bucketsToWrite = append(bucketsToWrite, bucket)
-			}
-		}
-	}
-	readBucketChan := make(chan readBucketResponse)
-	batches = distributeBucketIDs(bucketsToWrite, o.parameters.RedisPipelineSize)
-	for _, bucketIDs := range batches {
-		go o.asyncReadBucket(bucketIDs, storageID, readBucketChan)
-	}
-	blocksFromReadBucketBatches := make([]map[int]map[string]string, len(batches))
-	for i := 0; i < len(batches); i++ {
-		response := <-readBucketChan
-		if response.err != nil {
-			return fmt.Errorf("unable to read bucket from the server; %s", response.err)
-		}
-		blocksFromReadBucketBatches[i] = response.bucketValues
-	}
-	for _, blocks := range blocksFromReadBucketBatches {
-		go o.storageHandler.BatchWriteBucket(storageID, blocks, nil)
-	}
-	return nil
 }
 
 type readBucketResponse struct {
@@ -150,12 +93,6 @@ func (o *oramNodeServer) asyncReadBucket(bucketIDs []int, storageID int, respons
 func (o *oramNodeServer) readAllBuckets(buckets []int, storageID int) (blocksFromReadBucket map[int]map[string]string, err error) {
 	log.Debug().Msgf("Reading all buckets with buckets %v and storageID %d", buckets, storageID)
 	blocksFromReadBucket = make(map[int]map[string]string) // map of bucket to map of block to value
-	for _, bucket := range buckets {
-		blocksFromReadBucket[bucket] = make(map[string]string)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("unable to get bucket ids for early reshuffle path; %v", err)
-	}
 	for _, bucket := range buckets {
 		blocksFromReadBucket[bucket] = make(map[string]string)
 	}
@@ -297,16 +234,6 @@ func (o *oramNodeServer) getDistinctPathsInBatch(requests []*pb.BlockRequest) []
 	return pathList
 }
 
-type blockOffsetResponse struct {
-	offsets map[int]strg.BlockOffsetStatus
-	err     error
-}
-
-func (o *oramNodeServer) asyncGetBlockOffset(bucketIDs []int, storageID int, blocks []string, responseChan chan blockOffsetResponse) {
-	offsets, err := o.storageHandler.BatchGetBlockOffset(bucketIDs, storageID, blocks)
-	responseChan <- blockOffsetResponse{offsets: offsets, err: err}
-}
-
 type readBlockResponse struct {
 	values map[int]string
 	err    error
@@ -351,25 +278,18 @@ func (o *oramNodeServer) ReadPath(ctx context.Context, request *pb.ReadPathReque
 	if err != nil {
 		return nil, fmt.Errorf("could not get bucket ids in the paths; %v", err)
 	}
-	_, getBlockOffsetsSpan := tracer.Start(ctx, "get block offsets")
-	offsetListResponseChan := make(chan blockOffsetResponse)
+	// _, getBlockOffsetsSpan := tracer.Start(ctx, "get block offsets")
+	// offsetListResponseChan := make(chan blockOffsetResponse)
 	batches := distributeBucketIDs(buckets, o.parameters.RedisPipelineSize)
-	for _, bucketIDs := range batches {
-		go o.asyncGetBlockOffset(bucketIDs, int(request.StorageId), blocks, offsetListResponseChan)
-	}
-	getBlockOffsetsSpan.End()
+	// for _, bucketIDs := range batches {
+	// go o.asyncGetBlockOffset(bucketIDs, int(request.StorageId), blocks, offsetListResponseChan)
+	// }
+	// getBlockOffsetsSpan.End()
 	var offsetList []map[int]int // list of map of bucket id to offset
 	for i := 0; i < len(batches); i++ {
-		response := <-offsetListResponseChan
-		if response.err != nil {
-			return nil, fmt.Errorf("could not get offset from storage")
-		}
 		offsetList = append(offsetList, make(map[int]int))
-		for bucketID, offsetStatus := range response.offsets {
-			if offsetStatus.IsReal {
-				realBlockBucketMapping[bucketID] = offsetStatus.BlockFound
-			}
-			offsetList[i][bucketID] = offsetStatus.Offset
+		for _, bucketID := range batches[i] {
+			offsetList[i][bucketID] = 0
 		}
 	}
 	log.Debug().Msgf("Got offsets %v", offsetList)
@@ -398,13 +318,6 @@ func (o *oramNodeServer) ReadPath(ctx context.Context, request *pb.ReadPathReque
 	}
 	readBlocksSpan.End()
 	log.Debug().Msgf("Going to return values %v", returnValues)
-
-	_, earlyReshuffleSpan := tracer.Start(ctx, "early reshuffle")
-	err = o.earlyReshuffle(buckets, int(request.StorageId))
-	if err != nil {
-		return nil, fmt.Errorf("early reshuffle failed;%s", err)
-	}
-	earlyReshuffleSpan.End()
 
 	o.readPathCounter.Add(1)
 
@@ -481,7 +394,7 @@ func StartServer(oramNodeServerID int, bindIP string, advIP string, rpcPort int,
 			storages = append(storages, redisEndpoint)
 		}
 	}
-	storageHandler := strg.NewStorageHandler(parameters.TreeHeight, parameters.Z, parameters.S, parameters.Shift, storages)
+	storageHandler := strg.NewStorageHandler(parameters.TreeHeight, parameters.Z, parameters.Shift, storages)
 	if isFirst {
 		err = storageHandler.InitDatabase()
 		if err != nil {

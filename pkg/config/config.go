@@ -59,7 +59,6 @@ type Parameters struct {
 	EpochTime         float64 `yaml:"epoch-time"`
 	Trace             bool    `yaml:"trace"`
 	Z                 int     `yaml:"Z"`
-	S                 int     `yaml:"S"`
 	Shift             int     `yaml:"shift"`
 	TreeHeight        int     `yaml:"tree-height"`
 	RedisPipelineSize int     `yaml:"redis-pipeline-size"`
@@ -77,7 +76,6 @@ func (o Parameters) String() string {
 	output += "BatchTimout: " + strconv.FormatFloat(o.BatchTimout, 'f', -1, 64) + "\n"
 	output += "EpochTime: " + strconv.FormatFloat(o.EpochTime, 'f', -1, 64) + "\n"
 	output += "Z: " + strconv.Itoa(o.Z) + "\n"
-	output += "S: " + strconv.Itoa(o.S) + "\n"
 	output += "Shift: " + strconv.Itoa(o.Shift) + "\n"
 	output += "TreeHeight: " + strconv.Itoa(o.TreeHeight) + "\n"
 	output += "RedisPipelineSize: " + strconv.Itoa(o.RedisPipelineSize) + "\n"
