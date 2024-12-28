@@ -1,0 +1,16 @@
+endpoints:
+  - exposed_ip: 20.55.22.93
+    local_bind_ip: 10.2.0.21
+    deploy_host: host1
+    port: 8845
+    id: 0
+  - exposed_ip: 172.174.232.13
+    local_bind_ip: 10.2.0.22
+    deploy_host: host2
+    port: 8845
+    id: 1
+  - exposed_ip: 52.224.240.138
+    local_bind_ip: 10.2.0.23
+    deploy_host: host3
+    port: 8745
+    id: 2

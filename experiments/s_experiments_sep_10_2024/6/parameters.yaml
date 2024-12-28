@@ -1,0 +1,15 @@
+max-blocks-to-send: 400 # The maximum number of blocks to send from each shard node to the oram node during evictions
+eviction-rate: 100 # How many ReadPath operations before eviction
+evict-path-count: 200 # How many paths to evict at a time
+batch-timeout: 0.5 # How many milliseconds to wait before sending a batch of blocks to the oram node 
+epoch-time: 0.5 # How many milliseconds between each epoch
+trace: false # Whether to use opentelemetry and jaeger
+Z: 1 # number of real blocks per bucket
+S: 6 # number of dummy blocks per bucket
+shift: 1 # 2^shift is the tree branching factor
+tree-height: 18 # height of the tree
+redis-pipeline-size: 3000000 # number of requests to pipeline to redis
+max-requests: 10000 # maximum number of requests in flight at the client
+block-size: 1024 # size of each block in bytes
+log: false # whether to log
+profile: false # Whether to profile

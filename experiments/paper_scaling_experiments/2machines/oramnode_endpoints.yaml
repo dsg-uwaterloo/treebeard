@@ -1,28 +1,28 @@
 endpoints:
-  - exposed_ip: 10.0.0.8
-    local_bind_ip: 10.0.0.8
-    deploy_host: host1
+  - exposed_ip: 10.2.0.14
+    local_bind_ip: 10.2.0.14
+    deploy_host: host0
     port: 1851
     id: 0
     replicaid: 0
     raftport: 1227
-  - exposed_ip: 10.0.0.8
-    local_bind_ip: 10.0.0.8
-    deploy_host: host1
+  - exposed_ip: 10.2.0.14
+    local_bind_ip: 10.2.0.14
+    deploy_host: host0
     port: 1861
     id: 1
     replicaid: 0
     raftport: 1237
-  - exposed_ip: 10.0.0.8
-    local_bind_ip: 10.0.0.8
-    deploy_host: host1
+  - exposed_ip: 10.2.0.14
+    local_bind_ip: 10.2.0.14
+    deploy_host: host0
     port: 1871
     id: 2
     replicaid: 0
     raftport: 1247
-  - exposed_ip: 10.0.0.8
-    local_bind_ip: 10.0.0.8
-    deploy_host: host1
+  - exposed_ip: 10.2.0.14
+    local_bind_ip: 10.2.0.14
+    deploy_host: host0
     port: 1881
     id: 3
     replicaid: 0

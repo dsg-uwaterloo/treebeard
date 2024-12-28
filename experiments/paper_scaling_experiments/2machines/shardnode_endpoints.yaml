@@ -1,7 +1,7 @@
 endpoints:
-  - exposed_ip: 10.0.0.8
-    local_bind_ip: 10.0.0.8
-    deploy_host: host1
+  - exposed_ip: 10.2.0.14
+    local_bind_ip: 10.2.0.14
+    deploy_host: host0
     port: 8848
     id: 0
     replicaid: 0

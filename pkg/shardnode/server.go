@@ -138,13 +138,18 @@ func (s *shardNodeServer) sendCurrentBatches() {
 			for _, readPathReply := range response.Responses {
 				log.Debug().Msgf("Got reply from oram node replica: %v", readPathReply)
 				if _, exists := responseChannels[readPathReply.Block]; exists {
-					timeout := time.After(1 * time.Second)
+					// timeout := time.After(1 * time.Second)
 					select {
-					case <-timeout:
-						log.Error().Msgf("Timeout while waiting for batch response channel for block %s", readPathReply.Block)
-						continue
+					// case <-timeout:
+					// 	log.Error().Msgf("Timeout while waiting for batch response channel for block %s", readPathReply.Block)
+					// 	continue
 					case responseChannels[readPathReply.Block] <- readPathReply.Value:
+					default:
 					}
+				} else {
+					s.shardNodeFSM.stashMu.Lock()
+					s.shardNodeFSM.stash[readPathReply.Block] = stashState{readPathReply.Value, 0, false}
+					s.shardNodeFSM.stashMu.Unlock()
 				}
 			}
 		}(response)

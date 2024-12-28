@@ -3,6 +3,7 @@ package oramnode
 import (
 	"context"
 	"fmt"
+	"math"
 	"net"
 	"strconv"
 	"sync/atomic"
@@ -58,22 +59,22 @@ func newOramNodeServer(oramNodeServerID int, replicaID int, raftNode *raft.Raft,
 }
 
 // It runs the failed eviction and read path as the new leader.
-func (o *oramNodeServer) performFailedOperations() error {
-	<-o.raftNode.LeaderCh()
-	o.oramNodeFSM.unfinishedEvictionMu.Lock()
-	o.oramNodeFSM.unfinishedReadPathMu.Lock()
-	needsEviction := o.oramNodeFSM.unfinishedEviction
-	o.oramNodeFSM.unfinishedEvictionMu.Unlock()
-	o.oramNodeFSM.unfinishedReadPathMu.Unlock()
-	if needsEviction != nil {
-		o.oramNodeFSM.unfinishedEvictionMu.Lock()
-		storageID := o.oramNodeFSM.unfinishedEviction.storageID
-		o.oramNodeFSM.unfinishedEvictionMu.Unlock()
-		log.Debug().Msgf("Performing failed eviction for storageID %d", storageID)
-		o.evict(storageID)
-	}
-	return nil
-}
+// func (o *oramNodeServer) performFailedOperations() error {
+// 	<-o.raftNode.LeaderCh()
+// 	o.oramNodeFSM.unfinishedEvictionMu.Lock()
+// 	o.oramNodeFSM.unfinishedReadPathMu.Lock()
+// 	needsEviction := o.oramNodeFSM.unfinishedEviction
+// 	o.oramNodeFSM.unfinishedEvictionMu.Unlock()
+// 	o.oramNodeFSM.unfinishedReadPathMu.Unlock()
+// 	if needsEviction != nil {
+// 		o.oramNodeFSM.unfinishedEvictionMu.Lock()
+// 		storageID := o.oramNodeFSM.unfinishedEviction.storageID
+// 		o.oramNodeFSM.unfinishedEvictionMu.Unlock()
+// 		log.Debug().Msgf("Performing failed eviction for storageID %d", storageID)
+// 		o.evict(storageID)
+// 	}
+// 	return nil
+// }
 
 type getAccessCountResponse struct {
 	counts map[int]int
@@ -172,10 +173,10 @@ func (o *oramNodeServer) writeBackBlocksToAllBuckets(buckets []int, storageID in
 func (o *oramNodeServer) evict(storageID int) error {
 	o.storageHandler.LockStorage(storageID)
 	defer o.storageHandler.UnlockStorage(storageID)
-	currentEvictionCount := o.oramNodeFSM.evictionCountMap[storageID]
-	paths := o.storageHandler.GetMultipleReverseLexicographicPaths(currentEvictionCount, o.parameters.EvictPathCount)
+	k := int(math.Min(float64(len(o.oramNodeFSM.evictionPathMap[storageID])), float64(o.parameters.EvictPathCount)))
+	paths := o.oramNodeFSM.evictionPathMap[storageID][:k]
 	log.Debug().Msgf("Evicting with paths %v and storageID %d", paths, storageID)
-	beginEvictionCommand, err := newReplicateBeginEvictionCommand(currentEvictionCount, storageID)
+	beginEvictionCommand, err := newReplicateBeginEvictionCommand(k, storageID)
 	if err != nil {
 		return fmt.Errorf("unable to marshal begin eviction command; %s", err)
 	}
@@ -208,7 +209,7 @@ func (o *oramNodeServer) evict(storageID int) error {
 
 	randomShardNode.sendBackAcksNacks(receivedBlocksIsWritten)
 
-	endEvictionCommand, err := newReplicateEndEvictionCommand(currentEvictionCount+o.parameters.EvictPathCount, storageID)
+	endEvictionCommand, err := newReplicateEndEvictionCommand(k, storageID)
 	if err != nil {
 		return fmt.Errorf("unable to marshal end eviction command; %s", err)
 	}
@@ -259,8 +260,6 @@ func (o *oramNodeServer) ReadPath(ctx context.Context, request *pb.ReadPathReque
 		blocks = append(blocks, request.Block)
 	}
 
-	realBlockBucketMapping := make(map[int]string) // map of bucket id to block
-
 	paths := o.getDistinctPathsInBatch(request.Requests)
 	beginReadPathCommand, err := newReplicateBeginReadPathCommand(paths, int(request.StorageId))
 	if err != nil {
@@ -278,46 +277,31 @@ func (o *oramNodeServer) ReadPath(ctx context.Context, request *pb.ReadPathReque
 	if err != nil {
 		return nil, fmt.Errorf("could not get bucket ids in the paths; %v", err)
 	}
-	// _, getBlockOffsetsSpan := tracer.Start(ctx, "get block offsets")
-	// offsetListResponseChan := make(chan blockOffsetResponse)
 	batches := distributeBucketIDs(buckets, o.parameters.RedisPipelineSize)
-	// for _, bucketIDs := range batches {
-	// go o.asyncGetBlockOffset(bucketIDs, int(request.StorageId), blocks, offsetListResponseChan)
-	// }
-	// getBlockOffsetsSpan.End()
-	var offsetList []map[int]int // list of map of bucket id to offset
-	for i := 0; i < len(batches); i++ {
-		offsetList = append(offsetList, make(map[int]int))
-		for _, bucketID := range batches[i] {
-			offsetList[i][bucketID] = 0
-		}
-	}
-	log.Debug().Msgf("Got offsets %v", offsetList)
 
+	readBucketResponseChan := make(chan readBucketResponse)
+	for _, bucketIDs := range batches {
+		go o.asyncReadBucket(bucketIDs, int(request.StorageId), readBucketResponseChan)
+	}
 	returnValues := make(map[string]string) // map of block to value
 	for _, block := range blocks {
 		returnValues[block] = ""
 	}
-	_, readBlocksSpan := tracer.Start(ctx, "read blocks")
-	readBlockResponseChan := make(chan readBlockResponse)
 
-	for _, offsets := range offsetList {
-		go o.asyncReadBlock(offsets, int(request.StorageId), readBlockResponseChan)
-	}
-	for i := 0; i < len(offsetList); i++ {
-		response := <-readBlockResponseChan
+	for i := 0; i < len(batches); i++ {
+		response := <-readBucketResponseChan
 		if response.err != nil {
-			log.Error().Msgf("Could not read block %v; %s", response.values, response.err)
+			log.Error().Msgf("Could not read bucket %v; %s", response.bucketValues, response.err)
 			return nil, err
 		}
-		for bucketID, value := range response.values {
-			if _, exists := realBlockBucketMapping[bucketID]; exists {
-				returnValues[realBlockBucketMapping[bucketID]] = value
+		for _, blockValues := range response.bucketValues {
+			for block, value := range blockValues {
+				// if _, exists := returnValues[block]; exists {
+				returnValues[block] = value
+				// }
 			}
 		}
 	}
-	readBlocksSpan.End()
-	log.Debug().Msgf("Going to return values %v", returnValues)
 
 	o.readPathCounter.Add(1)
 
@@ -411,11 +395,11 @@ func StartServer(oramNodeServerID int, bindIP string, advIP string, rpcPort int,
 			}
 		}
 	}()
-	go func() {
-		for {
-			oramNodeServer.performFailedOperations()
-		}
-	}()
+	// go func() {
+	// 	for {
+	// 		oramNodeServer.performFailedOperations()
+	// 	}
+	// }()
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(rpc.ContextPropagationUnaryServerInterceptor()))
 	pb.RegisterOramNodeServer(grpcServer, oramNodeServer)
 	grpcServer.Serve(lis)

@@ -1,0 +1,37 @@
+endpoints:
+  - exposed_ip: 172.171.240.104
+    local_bind_ip: 10.2.0.24
+    deploy_host: host4
+    port: 6379
+    id: 0
+    oramnode_id: 0
+  - exposed_ip: 172.171.240.104
+    local_bind_ip: 10.2.0.24
+    deploy_host: host4
+    port: 6380
+    id: 1
+    oramnode_id: 1
+  - exposed_ip: 172.171.240.104
+    local_bind_ip: 10.2.0.24
+    deploy_host: host4
+    port: 6381
+    id: 2
+    oramnode_id: 2
+  - exposed_ip: 172.171.240.104
+    local_bind_ip: 10.2.0.24
+    deploy_host: host4
+    port: 6382
+    id: 3
+    oramnode_id: 0
+  - exposed_ip: 172.171.240.104
+    local_bind_ip: 10.2.0.24
+    deploy_host: host4
+    port: 6383
+    id: 4
+    oramnode_id: 1
+  - exposed_ip: 172.171.240.104
+    local_bind_ip: 10.2.0.24
+    deploy_host: host4
+    port: 6384
+    id: 5
+    oramnode_id: 2

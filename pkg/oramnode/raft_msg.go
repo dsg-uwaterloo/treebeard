@@ -21,13 +21,13 @@ type Command struct {
 }
 
 type ReplicateBeginEvictionPayload struct {
-	CurrentEvictionCount int
-	StorageID            int
+	ToEvictCount int
+	StorageID    int
 }
 
 type ReplicateEndEvictionPayload struct {
-	UpdatedEvictionCount int
-	StorageID            int
+	DoneEvictCount int
+	StorageID      int
 }
 
 type ReplicateBeginReadPathPayload struct {
@@ -35,11 +35,11 @@ type ReplicateBeginReadPathPayload struct {
 	StorageID int
 }
 
-func newReplicateBeginEvictionCommand(currentEvictionCount int, storageID int) ([]byte, error) {
+func newReplicateBeginEvictionCommand(toEvictCount int, storageID int) ([]byte, error) {
 	payload, err := msgpack.Marshal(
 		&ReplicateBeginEvictionPayload{
-			CurrentEvictionCount: currentEvictionCount,
-			StorageID:            storageID,
+			ToEvictCount: toEvictCount,
+			StorageID:    storageID,
 		},
 	)
 	if err != nil {
@@ -58,11 +58,11 @@ func newReplicateBeginEvictionCommand(currentEvictionCount int, storageID int) (
 	return command, nil
 }
 
-func newReplicateEndEvictionCommand(updatedEvictionCount int, storageID int) ([]byte, error) {
+func newReplicateEndEvictionCommand(doneEvictCount int, storageID int) ([]byte, error) {
 	payload, err := msgpack.Marshal(
 		&ReplicateEndEvictionPayload{
-			UpdatedEvictionCount: updatedEvictionCount,
-			StorageID:            storageID,
+			DoneEvictCount: doneEvictCount,
+			StorageID:      storageID,
 		},
 	)
 	if err != nil {

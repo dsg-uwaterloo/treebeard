@@ -5,6 +5,8 @@ After=syslog.target network.target
 
 [Service]
 Type=simple
+StandardOutput=file:/root/treebeard/oramnode/{{ 'oramnode-' + item.id | string + '-' + item.replicaid | string + '.stdout.log' }}
+StandardError=file:/root/treebeard/oramnode/{{ 'oramnode-' + item.id | string + '-' + item.replicaid | string + '.stderr.log' }}
 ExecStart=/root/treebeard/oramnode/oramnode \
     -oramnodeid {{ item.id }} \
     -bindip {{ item.local_bind_ip }} \

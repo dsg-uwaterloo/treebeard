@@ -4,6 +4,7 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"math/rand"
 	"strconv"
@@ -74,14 +75,14 @@ func (s *StorageHandler) InitDatabase() error {
 	log.Debug().Msgf("Initializing the redis database")
 	for _, client := range s.storages {
 		// Do not reinitialize the database if it is already initialized
-		dbsize, err := client.DBSize(context.Background()).Result()
-		if err != nil {
-			return err
-		}
-		if dbsize == (int64((math.Pow(float64(s.shift+1), float64(s.treeHeight)))) - 1) {
-			continue
-		}
-		err = client.FlushAll(context.Background()).Err()
+		// dbsize, err := client.DBSize(context.Background()).Result()
+		// if err != nil {
+		// 	return err
+		// }
+		// if dbsize == (int64((math.Pow(float64(s.shift+1), float64(s.treeHeight)))) - 1) {
+		// 	continue
+		// }
+		err := client.FlushAll(context.Background()).Err()
 		if err != nil {
 			return err
 		}
@@ -107,12 +108,13 @@ func (s *StorageHandler) BatchReadBucket(bucketIDs []int, storageID int) (blocks
 	ctx := context.Background()
 	for _, bucketID := range bucketIDs {
 		results[bucketID] = make([]*redis.StringCmd, s.Z)
-		pos := 0
-		results[bucketID][0] = pipe.HGet(ctx, strconv.Itoa(bucketID), strconv.Itoa(pos))
+		for i := 0; i < s.Z; i++ {
+			results[bucketID][i] = pipe.HGet(ctx, strconv.Itoa(bucketID), strconv.Itoa(i))
+		}
 	}
 	_, err = pipe.Exec(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("error executing batch read bucket pipe: %v", err)
 	}
 	blocks = make(map[int]map[string]string)
 	for bucketID, result := range results {

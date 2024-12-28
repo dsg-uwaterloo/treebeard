@@ -49,20 +49,22 @@ do_all_experiments_exist() {
 }
 
 run_experiments() {
-    for experiment_group in $(pwd)/*
-    do
-        for experiment in $experiment_group/*
-        do
-            if do_all_experiments_exist $experiment -eq 0 ; then
-                echo "All experiments already exist for $(basename $experiment)"
-                continue
-            fi
-            if [ -d $experiment ]; then
-                deploy_the_system $experiment
-                run_experiment_N_times $experiment
-            fi            
-        done
-    done
+    # for experiment_group in $(pwd)/*
+    # do
+    # for experiment in /Users/aminst/Documents/oblishard/experiments/path_oram_stash_experiments_v2/*
+    # do
+    experiment="/Users/aminst/Documents/oblishard/experiments/path_oram_stash_experiments_v2/A1K10000"
+        echo $experiment
+        if do_all_experiments_exist $experiment -eq 0 ; then
+            echo "All experiments already exist for $(basename $experiment)"
+            continue
+        fi
+        if [ -d $experiment ]; then
+            deploy_the_system $experiment
+            run_experiment_N_times $experiment
+        fi
+    # done
+    # done
 }
 
 run_experiments

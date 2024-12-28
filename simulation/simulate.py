@@ -43,8 +43,8 @@ class Simulator:
 
 
 if __name__ == '__main__':
-    batch_size = 2
-    num_requests = 1000
+    batch_size = 2000
+    num_requests = 10000
     tree_path_count = 2**20
     sim = Simulator(num_requests, batch_size, tree_path_count)
     sim.run()
