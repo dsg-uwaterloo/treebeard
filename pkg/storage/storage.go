@@ -4,6 +4,7 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"math/rand"
 	"strconv"
@@ -105,6 +106,19 @@ type BlockOffsetStatus struct {
 	BlockFound string
 }
 
+// selectDummyBlock returns a still-valid dummy slot for a bucket. A read
+// invalidates its selected slot, so a bucket must not assume that dummy1 is
+// always available before the next early reshuffle.
+func (s *StorageHandler) selectDummyBlock(bucketID int, blockMap map[string]int) (string, int, error) {
+	for dummyNumber := 1; dummyNumber <= s.Z+s.S; dummyNumber++ {
+		dummyID := "dummy" + strconv.Itoa(dummyNumber)
+		if pos, exists := blockMap[dummyID]; exists {
+			return dummyID, pos, nil
+		}
+	}
+	return "", 0, fmt.Errorf("bucket %d has no valid dummy block", bucketID)
+}
+
 func (s *StorageHandler) BatchGetBlockOffset(bucketIDs []int, storageID int, blocks []string) (blockoffsetStatuses map[int]BlockOffsetStatus, err error) {
 	allBlockMap, err := s.BatchGetAllMetaData(bucketIDs, storageID)
 	if err != nil {
@@ -132,15 +146,14 @@ func (s *StorageHandler) BatchGetBlockOffset(bucketIDs []int, storageID int, blo
 		}
 		if blockoffsetStatuses[bucketID].Offset == -1 {
 			log.Debug().Msgf("Did not find any block in bucket %d, returning dummy block", bucketID)
-			if pos, exist := blockMap["dummy1"]; exist {
-				blockoffsetStatuses[bucketID] = BlockOffsetStatus{
-					Offset:     pos,
-					IsReal:     false,
-					BlockFound: "dummy1",
-				}
-			} else {
-				log.Error().Msgf("Did not find valid dummy block in bucket %d", bucketID)
-				return nil, err
+			dummyID, pos, dummyErr := s.selectDummyBlock(bucketID, blockMap)
+			if dummyErr != nil {
+				return nil, dummyErr
+			}
+			blockoffsetStatuses[bucketID] = BlockOffsetStatus{
+				Offset:     pos,
+				IsReal:     false,
+				BlockFound: dummyID,
 			}
 		}
 	}
@@ -191,6 +204,9 @@ func (s *StorageHandler) BatchGetAccessCount(bucketIDs []int, storageID int) (co
 // It reads multiple buckets from a single storage shard.
 func (s *StorageHandler) BatchReadBucket(bucketIDs []int, storageID int) (blocks map[int]map[string]string, err error) {
 	metadataMap, err := s.BatchGetAllMetaData(bucketIDs, storageID)
+	if err != nil {
+		return nil, err
+	}
 	results := make(map[int]map[string]*redis.StringCmd)
 	pipe := s.storages[storageID].Pipeline()
 	ctx := context.Background()
@@ -203,16 +219,14 @@ func (s *StorageHandler) BatchReadBucket(bucketIDs []int, storageID int) (blocks
 				i++
 			}
 		}
-		dummyCount := 1
 		for ; i < s.Z; i++ {
-			dummyID := "dummy" + strconv.Itoa(dummyCount)
-			pos, exists := metadata[dummyID]
-			if !exists {
-				return nil, err
+			dummyID, pos, dummyErr := s.selectDummyBlock(bucketID, metadata)
+			if dummyErr != nil {
+				return nil, dummyErr
 			}
+			delete(metadata, dummyID)
 			// We should do this data acess for not leaking access pattern
 			pipe.HGet(ctx, strconv.Itoa(bucketID), strconv.Itoa(pos))
-			dummyCount++
 		}
 	}
 	_, err = pipe.Exec(ctx)
@@ -377,26 +391,16 @@ func (s *StorageHandler) BatchReadBlock(bucketOffsets map[int]int, storageID int
 		}
 		values[bucketID] = value
 	}
-	invalidateMap := make(map[int]*redis.IntCmd)
-	bucketIDs := make([]int, len(bucketOffsets))
-	for bucketID := range bucketOffsets {
-		bucketIDs = append(bucketIDs, bucketID)
-	}
-	metadataMap, err := s.BatchGetAllMetaData(bucketIDs, storageID)
+	metadataFields, err := s.batchGetMetadataFieldsForOffsets(bucketOffsets, storageID)
 	if err != nil {
 		return nil, err
 	}
-	for bucketID, offset := range bucketOffsets {
-		// Issue HGET commands to invalidate value for current bucketID
-		metadata := metadataMap[bucketID]
-		for _, pos := range metadata {
-			if pos == offset {
-				cmd := pipe.HSet(ctx, strconv.Itoa(-1*bucketID), strconv.Itoa(pos), "__null__")
-				invalidateMap[bucketID] = cmd
-			}
-		}
-		cmd := pipe.HIncrBy(ctx, strconv.Itoa(-1*bucketID), "accessCount", 1)
-		invalidateMap[bucketID] = cmd
+	for bucketID := range bucketOffsets {
+		// Metadata is stored in logical record order; its value encodes the
+		// shuffled physical data offset. Invalidate the logical metadata field,
+		// not the physical offset itself.
+		pipe.HSet(ctx, strconv.Itoa(-1*bucketID), metadataFields[bucketID], "__null__")
+		pipe.HIncrBy(ctx, strconv.Itoa(-1*bucketID), "accessCount", 1)
 	}
 	_, err = pipe.Exec(ctx)
 	if err != nil {

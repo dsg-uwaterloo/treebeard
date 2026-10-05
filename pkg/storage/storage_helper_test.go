@@ -80,6 +80,33 @@ func TestParseMetadataBlocksReturnsAllValidRealAndDummyBlocks(t *testing.T) {
 	}
 }
 
+func TestMetadataFieldForOffsetUsesLogicalMetadataField(t *testing.T) {
+	// The real block is physically stored at slot 3 but described by logical
+	// metadata field 0. dummy1 is physically stored at slot 0 and described by
+	// metadata field 1. Reading dummy1 must invalidate field 1, not field 0.
+	metadata := map[string]string{
+		"0":           "3k0",
+		"1":           "0dummy1",
+		"2":           "5dummy2",
+		"accessCount": "0",
+	}
+
+	field, err := metadataFieldForOffset(7, metadata, 0)
+	if err != nil {
+		t.Fatalf("metadataFieldForOffset returned an error: %v", err)
+	}
+	if field != "1" {
+		t.Fatalf("metadata field for physical offset 0 = %q, want logical field 1", field)
+	}
+}
+
+func TestMetadataFieldForOffsetRejectsMissingOffset(t *testing.T) {
+	metadata := map[string]string{"0": "3k0", "1": "__null__", "accessCount": "1"}
+	if _, err := metadataFieldForOffset(7, metadata, 0); err == nil {
+		t.Fatal("metadataFieldForOffset succeeded for an unrepresented physical offset")
+	}
+}
+
 // Expects redis to be running on port 6379
 func TestBatchGetAllMetaDataReturnsAllBucketOffsets(t *testing.T) {
 	storageHandler := NewStorageHandler(3, 1, 9, 1, []config.RedisEndpoint{{ID: 0, IP: "localhost", Port: 6379}})

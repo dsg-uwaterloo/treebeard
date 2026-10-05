@@ -148,6 +148,24 @@ func TestBatchGetBlockOffset(t *testing.T) {
 	}
 }
 
+func TestSelectDummyBlockUsesAnAvailableDummy(t *testing.T) {
+	s := NewStorageHandler(3, 1, 2, 1, nil)
+	dummyID, pos, err := s.selectDummyBlock(1, map[string]int{"dummy2": 7})
+	if err != nil {
+		t.Fatalf("selectDummyBlock returned an error: %v", err)
+	}
+	if dummyID != "dummy2" || pos != 7 {
+		t.Fatalf("selectDummyBlock = (%q, %d), want (dummy2, 7)", dummyID, pos)
+	}
+}
+
+func TestSelectDummyBlockFailsWhenAllDummiesAreConsumed(t *testing.T) {
+	s := NewStorageHandler(3, 1, 2, 1, nil)
+	if _, _, err := s.selectDummyBlock(1, map[string]int{}); err == nil {
+		t.Fatal("selectDummyBlock succeeded without an available dummy")
+	}
+}
+
 func TestBatchReadBucketReturnsBlocksInAllBuckets(t *testing.T) {
 	s := NewStorageHandler(4, 1, 9, 1, []config.RedisEndpoint{{ID: 0, IP: "localhost", Port: 6379}})
 	s.InitDatabase()

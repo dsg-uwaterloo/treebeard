@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"math/rand"
 	"strconv"
@@ -141,6 +142,62 @@ func parseMetadataBlocks(bucketMetadata map[int]*redis.MapStringStringCmd) (bloc
 		}
 	}
 	return allBlockOffsets, nil
+}
+
+// metadataFieldForOffset returns the Redis hash field whose metadata value
+// describes the requested physical data offset. Metadata records are stored in
+// logical order while their values encode the shuffled physical position, so
+// the metadata field is not necessarily equal to the data offset.
+func metadataFieldForOffset(bucketID int, metadata map[string]string, offset int) (string, error) {
+	matchingField := ""
+	for field, block := range metadata {
+		if field == "accessCount" || block == "__null__" {
+			continue
+		}
+		pos, _, err := parseMetadataBlock(block)
+		if err != nil {
+			return "", err
+		}
+		if pos != offset {
+			continue
+		}
+		if matchingField != "" {
+			return "", fmt.Errorf("bucket %d has multiple metadata fields for physical offset %d", bucketID, offset)
+		}
+		matchingField = field
+	}
+	if matchingField == "" {
+		return "", fmt.Errorf("bucket %d has no metadata field for physical offset %d", bucketID, offset)
+	}
+	return matchingField, nil
+}
+
+// batchGetMetadataFieldsForOffsets resolves physical data offsets back to the
+// logical Redis metadata fields that must be invalidated after a read.
+func (s *StorageHandler) batchGetMetadataFieldsForOffsets(bucketOffsets map[int]int, storageID int) (map[int]string, error) {
+	ctx := context.Background()
+	pipe := s.storages[storageID].Pipeline()
+	results := make(map[int]*redis.MapStringStringCmd, len(bucketOffsets))
+	for bucketID := range bucketOffsets {
+		results[bucketID] = pipe.HGetAll(ctx, strconv.Itoa(-1*bucketID))
+	}
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, err
+	}
+
+	fields := make(map[int]string, len(bucketOffsets))
+	for bucketID, cmd := range results {
+		metadata, err := cmd.Result()
+		if err != nil {
+			return nil, err
+		}
+		field, err := metadataFieldForOffset(bucketID, metadata, bucketOffsets[bucketID])
+		if err != nil {
+			return nil, err
+		}
+		fields[bucketID] = field
+	}
+	return fields, nil
 }
 
 // Returns a map of bucketID to a map of block to position. It returns all the valid real and dummy blocks in the bucket.
